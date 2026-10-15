@@ -9,19 +9,14 @@ WebServer server(80);
 // DASHBOARD DATA
 // ============================================================
 
-float dashboardRPM = 0;
-float dashboardSpeed = 0;
-float dashboardCoolant = 0;
-float dashboardThrottle = 0;
-
-String dashboardJSON = "Waiting for data...";
-String dashboardRawCAN =
-    "No DTC analysis yet.\n"
-    "Press READ DTC to start predictive analysis.";
-String dashboardEvents = "Dashboard started.";
+String dashboardLiveJSON     = "{}";
+String dashboardReadingsJSON = "{}";
+String dashboardPrediction   = "No DTC analysis yet.\nPress READ DTC to start predictive analysis.";
+String dashboardCanFeed      = "Waiting for CAN frames...\n";
+String dashboardEvents       = "Dashboard started.";
 
 String dashboardRequestResult = "No dashboard request yet.";
-String dashboardLastRequest = "None";
+String dashboardLastRequest   = "None";
 
 volatile int pendingDashboardRequest = 0;
 
@@ -80,24 +75,68 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
             margin-top: 0;
             border-bottom: 1px solid #333;
             padding-bottom: 10px;
-        }
-
-        .data {
-            font-size: 20px;
-            line-height: 1.8;
+            font-size: 16px;
         }
 
         pre {
             white-space: pre-wrap;
             word-wrap: break-word;
-            font-size: 14px;
+            font-size: 13px;
             max-height: 350px;
+            overflow-y: auto;
+            margin: 0;
+        }
+
+        /* ================================================
+           LIVE ZONE
+           ================================================ */
+
+        .live-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .live-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 10px;
+            background: #151515;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        .live-label {
+            color: #aaa;
+        }
+
+        .live-value {
+            font-weight: bold;
+            color: #7fd6a5;
+        }
+
+        .live-value.missing {
+            color: #555;
+        }
+
+        /* ================================================
+           CAN FEED ZONE
+           ================================================ */
+
+        #canfeed {
+            font-family: Consolas, monospace;
+            font-size: 12px;
+            color: #9ecbff;
+            background: #0c0c0c;
+            border-radius: 6px;
+            padding: 10px;
+            max-height: 320px;
             overflow-y: auto;
         }
 
-        /* ====================================================
+        /* ================================================
            PREDICTIVE DIAGNOSTICS
-           ==================================================== */
+           ================================================ */
 
         #rawcan {
             min-height: 170px;
@@ -214,9 +253,9 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
             font-weight: bold;
         }
 
-        /* ====================================================
+        /* ================================================
            REQUEST BUTTONS
-           ==================================================== */
+           ================================================ */
 
         .request-zone {
             grid-column: 1 / -1;
@@ -273,15 +312,9 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
         }
 
         @media (max-width: 700px) {
-
-            .dashboard {
-                grid-template-columns: 1fr;
-            }
-
-            .request-zone {
-                grid-column: auto;
-            }
-
+            .dashboard { grid-template-columns: 1fr; }
+            .request-zone { grid-column: auto; }
+            .live-grid { grid-template-columns: 1fr; }
         }
 
     </style>
@@ -309,41 +342,23 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
 
             <h2>LIVE VEHICLE DATA</h2>
 
-            <div class="data">
-
-                RPM:
-                <span id="rpm">--</span>
-
-                <br>
-
-                Speed:
-                <span id="speed">--</span>
-                km/h
-
-                <br>
-
-                Coolant:
-                <span id="coolant">--</span>
-                °C
-
-                <br>
-
-                Throttle:
-                <span id="throttle">--</span>
-                %
-
+            <div class="live-grid" id="liveGrid">
+                <div class="live-row">
+                    <span class="live-label">Waiting...</span>
+                    <span class="live-value missing">--</span>
+                </div>
             </div>
 
         </div>
 
 
         <!-- ========================================= -->
-        <!-- ZONE 2 : JSON -->
+        <!-- ZONE 2 : JSON OUTPUT -->
         <!-- ========================================= -->
 
         <div class="zone">
 
-            <h2>JSON OUTPUT</h2>
+            <h2>JSON OUTPUT (to app)</h2>
 
             <pre id="json">Waiting for data...</pre>
 
@@ -374,14 +389,14 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
 
 
         <!-- ========================================= -->
-        <!-- ZONE 4 : EVENTS -->
+        <!-- ZONE 4 : CAN FRAME FEED -->
         <!-- ========================================= -->
 
         <div class="zone">
 
-            <h2>DIAGNOSTIC EVENTS</h2>
+            <h2>DIAGNOSTIC EVENTS / CAN FRAMES</h2>
 
-            <pre id="events">Dashboard started.</pre>
+            <pre id="canfeed">Waiting for CAN frames...</pre>
 
         </div>
 
@@ -400,21 +415,10 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
 
                 <div class="button-row">
 
-                    <button onclick="sendRequest('rpm')">
-                        READ RPM
-                    </button>
-
-                    <button onclick="sendRequest('speed')">
-                        READ SPEED
-                    </button>
-
-                    <button onclick="sendRequest('coolant')">
-                        READ COOLANT
-                    </button>
-
-                    <button onclick="sendRequest('throttle')">
-                        READ THROTTLE
-                    </button>
+                    <button onclick="sendRequest('rpm')">READ RPM</button>
+                    <button onclick="sendRequest('speed')">READ SPEED</button>
+                    <button onclick="sendRequest('coolant')">READ COOLANT</button>
+                    <button onclick="sendRequest('throttle')">READ THROTTLE</button>
 
                 </div>
 
@@ -427,30 +431,18 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
 
                 <div class="button-row">
 
-                    <button onclick="sendRequest('vin')">
-                        READ VIN
-                    </button>
-
-                    <button onclick="sendRequest('dtc')">
-                        READ DTC
-                    </button>
-
-                    <button onclick="sendRequest('session')">
-                        DEFAULT SESSION
-                    </button>
+                    <button onclick="sendRequest('vin')">READ VIN</button>
+                    <button onclick="sendRequest('dtc')">READ DTC</button>
+                    <button onclick="sendRequest('session')">DEFAULT SESSION</button>
 
                 </div>
 
             </div>
 
 
-            <div class="request-status"
-                 id="requestStatus">
-                Ready.
-            </div>
+            <div class="request-status" id="requestStatus">Ready.</div>
 
-            <div class="request-result"
-                 id="requestResult">
+            <div class="request-result" id="requestResult">
                 No dashboard request yet.
             </div>
 
@@ -459,34 +451,115 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
     </div>
 
 
-    <!-- ============================================= -->
-    <!-- DASHBOARD SCRIPT -->
-    <!-- ============================================= -->
-
     <script>
 
         let requestBusy = false;
 
 
         // ====================================================
+        // PID META (label + unit for the LIVE zone)
+        // ====================================================
+
+        const PID_META = {
+            "04": { name: "Engine load",       unit: "%"    },
+            "05": { name: "Coolant",           unit: "°C"   },
+            "06": { name: "STFT",              unit: "%"    },
+            "07": { name: "LTFT",              unit: "%"    },
+            "0A": { name: "Fuel pressure",     unit: "kPa"  },
+            "0B": { name: "MAP",               unit: "kPa"  },
+            "0C": { name: "RPM",               unit: "rpm"  },
+            "0D": { name: "Speed",             unit: "km/h" },
+            "0E": { name: "Timing advance",    unit: "°"    },
+            "0F": { name: "Intake temp",       unit: "°C"   },
+            "10": { name: "MAF",               unit: "g/s"  },
+            "11": { name: "Throttle",          unit: "%"    },
+            "1C": { name: "OBD standard",      unit: ""     },
+            "1F": { name: "Engine runtime",    unit: "s"    },
+            "21": { name: "Distance w/ MIL",   unit: "km"   },
+            "2F": { name: "Fuel level",        unit: "%"    },
+            "31": { name: "Distance since clr",unit: "km"   },
+            "33": { name: "Barometric",        unit: "kPa"  },
+            "42": { name: "Module voltage",    unit: "V"    },
+            "46": { name: "Ambient temp",      unit: "°C"   },
+            "51": { name: "Fuel type",         unit: ""     },
+            "5C": { name: "Oil temp",          unit: "°C"   },
+            "5E": { name: "Fuel rate",         unit: "L/h"  }
+        };
+
+
+        // ====================================================
+        // RENDER LIVE ZONE
+        // ====================================================
+
+        function renderLiveZone(liveData)
+        {
+            const grid = document.getElementById("liveGrid");
+
+            let html = "";
+
+            for (const pid in PID_META)
+            {
+                const meta = PID_META[pid];
+
+                let displayValue = "--";
+                let missing = true;
+
+                if (liveData &&
+                    liveData[pid] !== undefined &&
+                    liveData[pid] !== null)
+                {
+                    displayValue = liveData[pid];
+
+                    if (typeof displayValue === "number")
+                    {
+                        displayValue = displayValue.toFixed(1);
+
+                        if (meta.unit === "rpm" ||
+                            meta.unit === "km/h" ||
+                            meta.unit === "s" ||
+                            meta.unit === "km")
+                        {
+                            displayValue =
+                                Math.round(liveData[pid]).toString();
+                        }
+                    }
+
+                    if (meta.unit)
+                        displayValue += " " + meta.unit;
+
+                    missing = false;
+                }
+
+                html +=
+                    '<div class="live-row">' +
+                        '<span class="live-label">' +
+                            meta.name +
+                        '</span>' +
+                        '<span class="live-value' +
+                            (missing ? ' missing' : '') +
+                        '">' +
+                            displayValue +
+                        '</span>' +
+                    '</div>';
+            }
+
+            grid.innerHTML = html;
+        }
+
+
+        // ====================================================
         // RENDER PREDICTIVE DIAGNOSTICS
-        // Converts the diagnostic text from the ESP32 into
-        // human-readable status cards.
         // ====================================================
 
         function renderPredictiveDiagnostics(text)
         {
-            const container =
-                document.getElementById("rawcan");
+            const container = document.getElementById("rawcan");
 
             if (!text || text.trim() === "")
                 return;
 
-            // ------------------------------------------------
-            // No analysis yet
-            // ------------------------------------------------
-
-            if (text.includes("No DTC analysis yet"))
+            if (text.includes("No DTC analysis yet") ||
+                text.includes("NO PREDICTIVE FAULT CHAIN DETECTED"))
             {
                 container.innerHTML = `
                     <div class="prediction-card status-neutral">
@@ -504,23 +577,9 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
                 return;
             }
 
-            // ------------------------------------------------
-            // Determine current DTC state
-            // ------------------------------------------------
-
-            const active =
-                text.includes("Status: ACTIVE");
-
-            const stored =
-                text.includes("Status: STORED");
-
-            const expired =
-                text.includes("Monitoring window exceeded");
-
-            // ------------------------------------------------
-            // Extract remaining time
-            // Example: Approx. 29 min 27 remaining
-            // ------------------------------------------------
+            const active  = text.includes("Status: ACTIVE");
+            const stored  = text.includes("Status: STORED");
+            const expired = text.includes("Monitoring window exceeded");
 
             let timer = "--:--";
 
@@ -530,18 +589,11 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
 
             if (timerMatch)
             {
-                const minutes =
-                    timerMatch[1].padStart(2, "0");
-
-                const seconds =
-                    timerMatch[2].padStart(2, "0");
+                const minutes = timerMatch[1].padStart(2, "0");
+                const seconds = timerMatch[2].padStart(2, "0");
 
                 timer = minutes + ":" + seconds;
             }
-
-            // ------------------------------------------------
-            // Current fault card
-            // ------------------------------------------------
 
             let statusLabel = "REPORTED";
 
@@ -552,39 +604,24 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
 
             const faultCard = `
                 <div class="prediction-card status-red">
-                    <div class="prediction-title">
-                        🔴 CURRENT FAULT
-                    </div>
-                    <div class="prediction-main">
-                        P0118
-                    </div>
+                    <div class="prediction-title">🔴 CURRENT FAULT</div>
+                    <div class="prediction-main">P0118</div>
                     <div class="prediction-detail">
                         Engine Coolant Temperature Sensor<br>
                         Signal High
                     </div>
-                    <div class="prediction-status">
-                        ${statusLabel}
-                    </div>
+                    <div class="prediction-status">${statusLabel}</div>
                 </div>`;
 
-            // ------------------------------------------------
-            // Drive status
-            // ------------------------------------------------
-
-            let driveCard = "";
+            let driveCard;
 
             if (expired)
             {
                 driveCard = `
                     <div class="prediction-card status-red">
-                        <div class="prediction-title">
-                            🔴 DRIVE STATUS
-                        </div>
+                        <div class="prediction-title">🔴 DRIVE STATUS</div>
                         <div class="prediction-main">
                             Monitoring window exceeded
-                        </div>
-                        <div class="prediction-detail">
-                            The prototype escalation condition has been reached.
                         </div>
                     </div>`;
             }
@@ -592,9 +629,7 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
             {
                 driveCard = `
                     <div class="prediction-card status-green">
-                        <div class="prediction-title">
-                            🟢 DRIVE STATUS
-                        </div>
+                        <div class="prediction-title">🟢 DRIVE STATUS</div>
                         <div class="prediction-main">
                             Temporary operation
                         </div>
@@ -608,11 +643,7 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
                     </div>`;
             }
 
-            // ------------------------------------------------
-            // Monitoring / prediction card
-            // ------------------------------------------------
-
-            let monitoringCard = "";
+            let monitoringCard;
 
             if (expired)
             {
@@ -637,18 +668,12 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
                         <div class="prediction-title">
                             🟡 MONITORING WINDOW
                         </div>
-                        <div class="prediction-timer">
-                            ${timer}
-                        </div>
+                        <div class="prediction-timer">${timer}</div>
                         <div class="prediction-detail">
                             Prototype monitoring estimate
                         </div>
                     </div>`;
             }
-
-            // ------------------------------------------------
-            // Predictive secondary conditions
-            // ------------------------------------------------
 
             const predictionCard = `
                 <div class="prediction-card status-yellow">
@@ -686,72 +711,52 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
             {
                 const response = await fetch(
                     "/data",
-                    {
-                        cache: "no-store"
-                    }
+                    { cache: "no-store" }
                 );
 
                 if (!response.ok)
-                {
                     throw new Error("HTTP error");
+
+                const data = await response.json();
+
+
+                // LIVE ZONE - structured
+
+                try
+                {
+                    const liveObj = JSON.parse(data.live);
+                    renderLiveZone(liveObj);
+                }
+                catch (e)
+                {
+                    // If parsing fails, leave the previous render
                 }
 
-                const data =
-                    await response.json();
 
-
-                // -----------------------------
-                // LIVE VEHICLE DATA
-                // -----------------------------
-
-                document.getElementById("rpm").textContent =
-                    data.rpm;
-
-                document.getElementById("speed").textContent =
-                    data.speed;
-
-                document.getElementById("coolant").textContent =
-                    data.coolant;
-
-                document.getElementById("throttle").textContent =
-                    data.throttle;
-
-
-                // -----------------------------
                 // JSON OUTPUT
-                // -----------------------------
 
                 document.getElementById("json").textContent =
                     data.json;
 
 
-                // -----------------------------
-                // PREDICTIVE DIAGNOSTICS
-                // -----------------------------
+                // PREDICTIVE ZONE
 
-                renderPredictiveDiagnostics(
-                    data.rawcan
-                );
+                renderPredictiveDiagnostics(data.prediction);
 
 
-                // -----------------------------
-                // EVENTS
-                // -----------------------------
+                // CAN FRAME FEED
 
-                document.getElementById("events").textContent =
-                    data.events;
+                document.getElementById("canfeed").textContent =
+                    data.can;
 
 
-                // -----------------------------
                 // REQUEST RESULT
-                // -----------------------------
 
                 if (data.request !== undefined)
                 {
                     document.getElementById(
                         "requestResult"
-                    ).textContent =
-                        data.request;
+                    ).textContent = data.request;
                 }
 
                 if (data.lastRequest !== undefined)
@@ -759,24 +764,20 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
                     document.getElementById(
                         "requestStatus"
                     ).textContent =
-                        "Last request: " +
-                        data.lastRequest;
+                        "Last request: " + data.lastRequest;
                 }
 
 
                 document.getElementById(
                     "connection"
-                ).textContent =
-                    "● ESP32 CONNECTED";
+                ).textContent = "● ESP32 CONNECTED";
 
             }
-
-            catch(error)
+            catch (error)
             {
                 document.getElementById(
                     "connection"
-                ).textContent =
-                    "● CONNECTION LOST";
+                ).textContent = "● CONNECTION LOST";
             }
         }
 
@@ -788,94 +789,56 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
         async function sendRequest(command)
         {
             if (requestBusy)
-            {
                 return;
-            }
 
             requestBusy = true;
 
-            document.getElementById(
-                "requestStatus"
-            ).textContent =
+            document.getElementById("requestStatus").textContent =
                 "Sending request: " + command + "...";
 
+            const buttons = document.querySelectorAll("button");
 
-            const buttons =
-                document.querySelectorAll("button");
-
-            buttons.forEach(
-                function(button)
-                {
-                    button.disabled = true;
-                }
-            );
-
+            buttons.forEach(b => b.disabled = true);
 
             try
             {
-                const response =
-                    await fetch(
-                        "/request?cmd=" +
-                        encodeURIComponent(command),
-                        {
-                            cache: "no-store"
-                        }
-                    );
-
+                const response = await fetch(
+                    "/request?cmd=" + encodeURIComponent(command),
+                    { cache: "no-store" }
+                );
 
                 if (!response.ok)
-                {
                     throw new Error("HTTP error");
-                }
 
-
-                const data =
-                    await response.json();
-
+                const data = await response.json();
 
                 if (data.status !== undefined)
                 {
                     document.getElementById(
                         "requestStatus"
-                    ).textContent =
-                        data.status;
+                    ).textContent = data.status;
                 }
-
 
                 if (data.result !== undefined)
                 {
                     document.getElementById(
                         "requestResult"
-                    ).textContent =
-                        data.result;
+                    ).textContent = data.result;
                 }
-
             }
-
-            catch(error)
+            catch (error)
             {
-                document.getElementById(
-                    "requestStatus"
-                ).textContent =
+                document.getElementById("requestStatus").textContent =
                     "Request communication failed.";
 
-                document.getElementById(
-                    "requestResult"
-                ).textContent =
+                document.getElementById("requestResult").textContent =
                     "No result received.";
-
             }
-
             finally
             {
                 requestBusy = false;
 
-                buttons.forEach(
-                    function(button)
-                    {
-                        button.disabled = false;
-                    }
-                );
+                buttons.forEach(b => b.disabled = false);
 
                 updateDashboard();
             }
@@ -885,16 +848,11 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
         // ====================================================
         // DASHBOARD REFRESH
         // ====================================================
+        //
+        // 250 ms for a snappier feel during bench work.
 
-        // Faster than the previous 1-second refresh.
-        // The ESP32 still controls the real diagnostic timing.
-        setInterval(
-            updateDashboard,
-            500
-        );
+        setInterval(updateDashboard, 250);
 
-
-        // First update immediately
         updateDashboard();
 
     </script>
@@ -909,47 +867,24 @@ const char dashboardHTML[] PROGMEM = R"rawliteral(
 // ESCAPE JSON STRING
 // ============================================================
 
-String escapeJsonString(
-    const String &input
-)
+String escapeJsonString(const String &input)
 {
     String output;
 
-    output.reserve(
-        input.length() + 20
-    );
+    output.reserve(input.length() + 20);
 
-    for (size_t i = 0;
-         i < input.length();
-         i++)
+    for (size_t i = 0; i < input.length(); i++)
     {
         char c = input[i];
 
         switch (c)
         {
-            case '\\':
-                output += "\\\\";
-                break;
-
-            case '"':
-                output += "\\\"";
-                break;
-
-            case '\n':
-                output += "\\n";
-                break;
-
-            case '\r':
-                output += "\\r";
-                break;
-
-            case '\t':
-                output += "\\t";
-                break;
-
-            default:
-                output += c;
-                break;
+            case '\\': output += "\\\\"; break;
+            case '"':  output += "\\\""; break;
+            case '\n': output += "\\n";  break;
+            case '\r': output += "\\r";  break;
+            case '\t': output += "\\t";  break;
+            default:   output += c;      break;
         }
     }
 
@@ -966,88 +901,48 @@ void handleDashboardData()
     String response;
 
     response.reserve(
-        dashboardJSON.length() +
-        dashboardRawCAN.length() +
+        dashboardLiveJSON.length() +
+        dashboardReadingsJSON.length() +
+        dashboardPrediction.length() +
+        dashboardCanFeed.length() +
         dashboardEvents.length() +
         dashboardRequestResult.length() +
-        300
+        500
     );
-
 
     response += "{";
 
-
-    response += "\"rpm\":";
-    response += String(
-        dashboardRPM,
-        0
-    );
-
-
-    response += ",\"speed\":";
-    response += String(
-        dashboardSpeed,
-        1
-    );
-
-
-    response += ",\"coolant\":";
-    response += String(
-        dashboardCoolant,
-        1
-    );
-
-
-    response += ",\"throttle\":";
-    response += String(
-        dashboardThrottle,
-        1
-    );
-
+    response += "\"live\":\"";
+    response += escapeJsonString(dashboardLiveJSON);
+    response += "\"";
 
     response += ",\"json\":\"";
-    response += escapeJsonString(
-        dashboardJSON
-    );
+    response += escapeJsonString(dashboardReadingsJSON);
     response += "\"";
 
-
-    response += ",\"rawcan\":\"";
-    response += escapeJsonString(
-        dashboardRawCAN
-    );
+    response += ",\"prediction\":\"";
+    response += escapeJsonString(dashboardPrediction);
     response += "\"";
 
+    response += ",\"can\":\"";
+    response += escapeJsonString(dashboardCanFeed);
+    response += "\"";
 
     response += ",\"events\":\"";
-    response += escapeJsonString(
-        dashboardEvents
-    );
+    response += escapeJsonString(dashboardEvents);
     response += "\"";
-
 
     response += ",\"request\":\"";
-    response += escapeJsonString(
-        dashboardRequestResult
-    );
+    response += escapeJsonString(dashboardRequestResult);
     response += "\"";
-
 
     response += ",\"lastRequest\":\"";
-    response += escapeJsonString(
-        dashboardLastRequest
-    );
+    response += escapeJsonString(dashboardLastRequest);
     response += "\"";
-
 
     response += "}";
 
-
-    server.send(
-        200,
-        "application/json",
-        response
-    );
+    server.send(200, "application/json", response);
 }
 
 
@@ -1056,51 +951,39 @@ void handleDashboardData()
 // ============================================================
 
 void updateDashboardData(
-    float rpm,
-    float speed,
-    float coolant,
-    float throttle,
-    const String &jsonData,
-    const String &rawCanData,
-    const String &eventData
-)
+    const String &liveJSON,
+    const String &readingsJSON,
+    const String &prediction,
+    const String &canFeed,
+    const String &eventData)
 {
-    dashboardRPM =
-        rpm;
-
-    dashboardSpeed =
-        speed;
-
-    dashboardCoolant =
-        coolant;
-
-    dashboardThrottle =
-        throttle;
+    dashboardLiveJSON     = liveJSON;
+    dashboardReadingsJSON = readingsJSON;
+    dashboardPrediction   = prediction;
+    dashboardCanFeed      = canFeed;
+    dashboardEvents       = eventData;
+}
 
 
-    dashboardJSON =
-        jsonData;
+// ============================================================
+// UPDATE ONLY READINGS JSON (streaming)
+// ============================================================
 
-    dashboardRawCAN =
-        rawCanData;
-
-    dashboardEvents =
-        eventData;
+void updateDashboardJSON(const String &readingsJSON)
+{
+    dashboardReadingsJSON = readingsJSON;
 }
 
 
 // ============================================================
 // GET PENDING DASHBOARD REQUEST
-// Returns the command name, or "" if nothing is pending.
 // ============================================================
 
 String getPendingDashboardRequest()
 {
-    int request =
-        pendingDashboardRequest;
+    int request = pendingDashboardRequest;
 
-    pendingDashboardRequest =
-        0;
+    pendingDashboardRequest = 0;
 
     switch (request)
     {
@@ -1123,18 +1006,13 @@ String getPendingDashboardRequest()
 
 void updateDashboardRequestResult(
     const String &requestName,
-    const String &result
-)
+    const String &result)
 {
-    dashboardLastRequest =
-        requestName;
-
-    dashboardRequestResult =
-        result;
+    dashboardLastRequest = requestName;
+    dashboardRequestResult = result;
 
     dashboardEvents =
-        "Dashboard request completed:\n" +
-        requestName;
+        "Dashboard request completed:\n" + requestName;
 }
 
 
@@ -1151,71 +1029,21 @@ void handleDashboardRequest()
             "application/json",
             "{\"status\":\"Missing command.\",\"result\":\"No command received.\"}"
         );
-
         return;
     }
 
-
-    String command =
-        server.arg("cmd");
-
-
+    String command = server.arg("cmd");
     command.toLowerCase();
 
+    int requestCode = 0;
 
-    int requestCode =
-        0;
-
-
-    // --------------------------------------------------------
-    // OBD-II
-    // --------------------------------------------------------
-
-    if (command == "rpm")
-    {
-        requestCode = 1;
-    }
-
-    else if (command == "speed")
-    {
-        requestCode = 2;
-    }
-
-    else if (command == "coolant")
-    {
-        requestCode = 3;
-    }
-
-    else if (command == "throttle")
-    {
-        requestCode = 4;
-    }
-
-
-    // --------------------------------------------------------
-    // UDS
-    // --------------------------------------------------------
-
-    else if (command == "vin")
-    {
-        requestCode = 5;
-    }
-
-    else if (command == "dtc")
-    {
-        requestCode = 6;
-    }
-
-    else if (command == "session")
-    {
-        requestCode = 7;
-    }
-
-
-    // --------------------------------------------------------
-    // Unknown command
-    // --------------------------------------------------------
-
+    if (command == "rpm")           requestCode = 1;
+    else if (command == "speed")    requestCode = 2;
+    else if (command == "coolant")  requestCode = 3;
+    else if (command == "throttle") requestCode = 4;
+    else if (command == "vin")      requestCode = 5;
+    else if (command == "dtc")      requestCode = 6;
+    else if (command == "session")  requestCode = 7;
     else
     {
         server.send(
@@ -1223,14 +1051,8 @@ void handleDashboardRequest()
             "application/json",
             "{\"status\":\"Unknown request.\",\"result\":\"Command not implemented.\"}"
         );
-
         return;
     }
-
-
-    // --------------------------------------------------------
-    // Only one request is queued at a time.
-    // --------------------------------------------------------
 
     if (pendingDashboardRequest != 0)
     {
@@ -1239,37 +1061,22 @@ void handleDashboardRequest()
             "application/json",
             "{\"status\":\"Request already pending.\",\"result\":\"Please wait for the current diagnostic operation.\"}"
         );
-
         return;
     }
 
+    pendingDashboardRequest = requestCode;
 
-    pendingDashboardRequest =
-        requestCode;
-
-
-    dashboardLastRequest =
-        command;
-
+    dashboardLastRequest = command;
     dashboardRequestResult =
         "Request sent to diagnostic core.\nWaiting for ECU response...";
-
 
     String response =
         "{\"status\":\"Request queued.\",\"result\":\"";
 
-    response += escapeJsonString(
-        dashboardRequestResult
-    );
-
+    response += escapeJsonString(dashboardRequestResult);
     response += "\"}";
 
-
-    server.send(
-        200,
-        "application/json",
-        response
-    );
+    server.send(200, "application/json", response);
 }
 
 
@@ -1279,117 +1086,39 @@ void handleDashboardRequest()
 
 void startWebDashboard()
 {
-    // ESP32 creates its own Wi-Fi network
-    WiFi.mode(
-        WIFI_AP
-    );
-
-    WiFi.softAP(
-        "CAR-MUNICATION"
-    );
-
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP("CAR-MUNICATION");
 
     Serial.println();
+    Serial.println("================================");
+    Serial.println("     CAR-MUNICATION DASHBOARD");
+    Serial.println("================================");
+    Serial.print("WiFi SSID: CAR-MUNICATION\n");
+    Serial.print("Dashboard IP: ");
+    Serial.println(WiFi.softAPIP());
 
-    Serial.println(
-        "================================"
-    );
+    server.on("/", HTTP_GET, []()
+    {
+        server.send_P(200, "text/html", dashboardHTML);
+    });
 
-    Serial.println(
-        "     CAR-MUNICATION DASHBOARD"
-    );
+    server.on("/data", HTTP_GET, []()
+    {
+        handleDashboardData();
+    });
 
-    Serial.println(
-        "================================"
-    );
-
-
-    Serial.print(
-        "WiFi SSID: "
-    );
-
-    Serial.println(
-        "CAR-MUNICATION"
-    );
-
-
-    Serial.print(
-        "Dashboard IP: "
-    );
-
-    Serial.println(
-        WiFi.softAPIP()
-    );
-
-
-    // --------------------------------------------------------
-    // Main webpage
-    // --------------------------------------------------------
-
-    server.on(
-        "/",
-        HTTP_GET,
-        []()
-        {
-            server.send_P(
-                200,
-                "text/html",
-                dashboardHTML
-            );
-        }
-    );
-
-
-    // --------------------------------------------------------
-    // Live diagnostic data
-    // --------------------------------------------------------
-
-    server.on(
-        "/data",
-        HTTP_GET,
-        []()
-        {
-            handleDashboardData();
-        }
-    );
-
-
-    // --------------------------------------------------------
-    // Dashboard diagnostic request
-    // --------------------------------------------------------
-
-    server.on(
-        "/request",
-        HTTP_GET,
-        []()
-        {
-            handleDashboardRequest();
-        }
-    );
-
+    server.on("/request", HTTP_GET, []()
+    {
+        handleDashboardRequest();
+    });
 
     server.begin();
 
-
-    Serial.println(
-        "Web server started."
-    );
-
-    Serial.println(
-        "Live data endpoint: /data"
-    );
-
-    Serial.println(
-        "Diagnostic request endpoint: /request"
-    );
-
-    Serial.println(
-        "Dashboard refresh: 500 ms"
-    );
-
-    Serial.println(
-        "================================"
-    );
+    Serial.println("Web server started.");
+    Serial.println("Live data endpoint: /data");
+    Serial.println("Diagnostic request endpoint: /request");
+    Serial.println("Dashboard refresh: 250 ms");
+    Serial.println("================================");
 }
 
 
